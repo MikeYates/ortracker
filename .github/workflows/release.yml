@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          swiftc -O ORTracker.swift -o ORTracker
+          mkdir -p ORTracker.app/Contents/MacOS
+          cp ORTracker ORTracker.app/Contents/MacOS/ORTracker
+          cp Info.plist ORTracker.app/Contents/Info.plist
+
+      - name: Package
+        run: |
+          if command -v create-dmg &>/dev/null; then
+            VERSION="${{ github.ref_name }}"
+            create-dmg \
+              --volname "ORTracker $VERSION" \
+              --window-pos 200 120 \
+              --window-size 600 400 \
+              --icon-size 100 \
+              --icon "ORTracker.app" 175 190 \
+              --hide-extension "ORTracker.app" \
+              --app-drop-link 425 190 \
+              "ORTracker-${VERSION}.dmg" \
+              "ORTracker.app" 2>/dev/null || \
+            zip -r "ORTracker-${VERSION}.zip" ORTracker.app
+          else
+            VERSION="${{ github.ref_name }}"
+            zip -r "ORTracker-${VERSION}.zip" ORTracker.app
+          fi
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ORTracker-*.dmg
+            ORTracker-*.zip

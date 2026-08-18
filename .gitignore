@@ -1,0 +1,11 @@
+*.swp
+*.swo
+.DS_Store
+.build/
+.build/x86_64-apple-macosx/
+.build/arm64-apple-macosx/
+.Package.resolved
+Packages/
+*.o
+ortracker_dmg/
+*.dmg

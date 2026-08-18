@@ -1,3 +1,7 @@
 name = "ortracker"
 main = "worker.js"
 compatibility_date = "2026-08-01"
+
+routes = [
+  { pattern = "ortracker.yates.id", custom_domain = true }
+]

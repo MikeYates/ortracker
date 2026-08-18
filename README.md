@@ -1,6 +1,10 @@
 # ORTracker — OpenRouter Balance Tracker
 
-A native macOS menu bar app that shows your OpenRouter balance at a glance. Live balance, automatic top-up detection, silent auto-updates.
+A native macOS menu bar app that shows your OpenRouter balance at a glance. Live balance, automatic top-up detection, one-command install.
+
+<p align="center">
+  <img src="hero.svg" alt="ORTracker in the macOS menu bar" width="600">
+</p>
 
 ## Install
 
@@ -23,23 +27,19 @@ Requires macOS 13+ and an [OpenRouter API key](https://openrouter.ai/keys).
 
 **Top-up detection** — When you top up your OpenRouter account, the tracker automatically detects the increase and resets to 100%. The bar fills proportionally against your post-top-up balance.
 
-**Auto-update** — Enabled by default. Checks for new versions every 6 hours and updates silently in the background. Disable from the menu anytime.
-
 **Privacy first** — Your API key stays on your machine. The app calls OpenRouter directly — no third party, no analytics, no telemetry.
 
 ## How it works
 
 The app fetches your balance from OpenRouter's [credits API](https://openrouter.ai/docs/api-reference/credits) every 60 seconds. It stores a baseline (your balance after the last top-up) locally in `~/.ortracker/tracker.json`. When the balance jumps by more than $0.50, it registers as a top-up and the bar resets to 100%.
 
-Your API key is stored in `~/.ortracker/config` (restricted to 600 permissions).
+Your API key is stored in `~/.ortracker/config` (restricted to 600 permissions, readable only by you).
 
 ## Menu
 
 | Item | Action |
 |---|---|
 | Balance & percentage | Your current balance and remaining % |
-| Auto Update | Toggle automatic background updates |
-| Check for Updates | Manual update check |
 | Set API Key | Change your OpenRouter API key |
 | Refresh Now | Force a balance refresh |
 | Quit | Exit the app |
@@ -63,6 +63,12 @@ swiftc -O ORTracker.swift -o ORTracker
 # Run (after setting up API key)
 ./ORTracker
 ```
+
+## Security
+
+Your OpenRouter API key is stored on your machine at `~/.ortracker/config` with 600 file permissions (owner read/write only — no other user or process can read it without root). The app loads it only when making the balance request.
+
+The app sends a single HTTPS request to `openrouter.ai/api/v1/credits` with your key as a Bearer token. The same as every API call your browser or CLI tools make to OpenRouter. The connection is encrypted (TLS), and no telemetry, analytics, or logs leave your machine.
 
 ## Why?
 

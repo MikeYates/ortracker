@@ -1,471 +1,290 @@
 import AppKit
 import Foundation
 
-let APP_VERSION = "1.0.0"
-let GITHUB_REPO = "mikeyates/ortracker"
-let INSTALL_URL = "https://ortracker.yates.id/install.sh"
-let CONFIG_PATH = NSString(string: "~/.ortracker/config").expandingTildeInPath
-let TRACKER_PATH = NSString(string: "~/.ortracker/tracker.json").expandingTildeInPath
-
-struct Config: Codable {
-    var api_key: String
+struct ORUsageData: Decodable {
+    let ok: Bool
+    let error: String?
+    let days: Int?
+    let total_credits: Double?
+    let total_usage: Double?
+    let remaining: Double?
+    let remaining_pct: Double?
+    let total_cost: Double?
+    let total_calls: Int?
+    let total_tokens: Int?
+    let models: [ORModel]?
 }
 
-struct Tracker: Codable {
-    var baseline: Double // balance at last top-up (100% reference)
-    var lastBalance: Double
-    var autoUpdate: Bool
-    var lastUpdateCheck: Double // epoch
+struct ORModel: Decodable {
+    let model: String
+    let cost: Double
+    let tokens: Int
+    let api_calls: Int
+    let sessions: Int
 }
 
-struct GitHubRelease: Codable {
-    let tag_name: String
-    let assets: [GitHubAsset]?
-    let body: String?
-}
+let MODES = ["quotaBar", "balance", "percentage"]
 
-struct GitHubAsset: Codable {
-    let name: String
-    let browser_download_url: String
-}
+let OR_LOGO_B64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAABuklEQVRYhe3Wv0tVYRzH8ZeWFEWFYYXRFEJDQYt3KLggaFNDf0R/QGsQtERD1BxSNBQNkdjk0BAhuigqTQZCtDREkkZDcSO1huceiKdz7vlxj0RwP/As5/v9Pp/38/M89NTTP1ZfTnwEV9DASZzA3pIev/AJa3iOl0WKRvGqXVx3m8VwlnE/bmNnl8yT9h7HYvM9mNpl4z/bdAxwr0PyJuYwgzfYqgniXGJ+KSNhVdiE8cY7jlv43iXAdcK6r6QEX+BAPE2RGljvAuAhjKUElrA/xzxRU/UlmewXpjjWNbQKAszjacHcWGuwHFG9rdBRU/nRb+E0fIwCjyoADGC7JMCDpPhHFLhbAQC+lDBfxkHCCfgcdfTXDVVA+3CkQN4OHgsb/1vycTGie1cBYFz2aLeFn9BNnE0rvpNSNFESIO8KfyJc9am6kFKwikMFzS8r9vPqCDGfUvAagznmE/hawDwX4qL0Y/QBV3E4yj+DSfwsYZ4LcaNDUUtYloU2VJVrNxeirz2qbjsvBRFTzAhrOp41TTXqPI5mBUfwTH0Pj6y2kfcqHhKOWQOnhFfxQMmRZqmF+zX11dN/rN+h84r/xbqyIgAAAABJRU5ErkJggg=="
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var timer: Timer?
-    private var updateTimer: Timer?
-    private var balance: Double?
-    private var baseline: Double?
-    private var autoUpdate = true
-    private var currentVersion = APP_VERSION
-    private var pendingUpdate: String?
-    private let topUpThreshold = 0.50
+    private var currentDays = 7
+    private var latest: ORUsageData?
+    private var displayMode = "balance" // "quotaBar" | "balance" | "percentage"
+    private var quotaRef: Double = 0 // balance at last Reset Quota; used to compute remaining %
+    private let scriptPath = NSString(string: "~/.ortracker/or_usage.py").expandingTildeInPath
+    private let pythonPath = "/usr/bin/python3"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        loadTracker()
-        ensureConfig()
+        displayMode = UserDefaults.standard.string(forKey: "orViewMode") ?? "balance"
+        if !MODES.contains(displayMode) { displayMode = "balance" }
+        quotaRef = UserDefaults.standard.double(forKey: "orQuotaRef")
         if let button = statusItem.button {
             button.title = "OR …"
-            button.toolTip = "OpenRouter balance tracker"
-            button.font = NSFont.monospacedDigitSystemFont(ofSize: 0, weight: .regular)
+            button.toolTip = "OpenRouter"
+            button.imagePosition = .imageLeft
         }
-        refresh(balance: nil)
-        checkForUpdates(silent: true)
-        // Balance refresh every 60s
-        timer = Timer.scheduledTimer(timeInterval: 60, target: self, selector: #selector(refreshTimer), userInfo: nil, repeats: true)
-        // Update check every 6 hours
-        updateTimer = Timer.scheduledTimer(timeInterval: 21600, target: self, selector: #selector(checkForUpdatesSilent), userInfo: nil, repeats: true)
+        refresh(nil)
+        timer = Timer.scheduledTimer(timeInterval: 60, target: self, selector: #selector(refresh(_:)), userInfo: nil, repeats: true)
     }
 
-    // MARK: - Config & Tracker
-
-    private func ensureConfig() {
-        let path = CONFIG_PATH as NSString
-        let dir = path.deletingLastPathComponent
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        if !FileManager.default.fileExists(atPath: CONFIG_PATH) {
-            // First run — prompt for API key via alert
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                self.promptForApiKey()
-            }
-        }
-    }
-
-    private func promptForApiKey() {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "OpenRouter API Key"
-        alert.informativeText = "ORTracker needs your OpenRouter API key to track your balance.\n\nGet it from: https://openrouter.ai/keys"
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 24))
-        field.placeholderString = "sk-or-v1-..."
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Quit")
-        alert.window.initialFirstResponder = field
-        if alert.runModal() == .alertFirstButtonReturn {
-            let key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !key.isEmpty {
-                saveConfig(Config(api_key: key))
-            }
-        } else {
-            NSApp.terminate(nil)
-        }
-    }
-
-    private func saveConfig(_ config: Config) {
-        if let data = try? JSONEncoder().encode(config) {
-            try? data.write(to: URL(fileURLWithPath: CONFIG_PATH), options: [.atomic, .completeFileProtection])
-            // Restrict permissions
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: CONFIG_PATH)
-        }
-    }
-
-    private func loadConfig() -> Config? {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: CONFIG_PATH)),
-              let config = try? JSONDecoder().decode(Config.self, from: data) else {
-            return nil
-        }
-        return config
-    }
-
-    private func loadTracker() {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: TRACKER_PATH)),
-              let store = try? JSONDecoder().decode(Tracker.self, from: data) else {
-            autoUpdate = true
-            return
-        }
-        baseline = store.baseline
-        autoUpdate = store.autoUpdate
-    }
-
-    private func saveTracker(baseline bl: Double, lastBalance: Double) {
-        let store = Tracker(baseline: bl, lastBalance: lastBalance, autoUpdate: autoUpdate, lastUpdateCheck: Date().timeIntervalSince1970)
-        if let data = try? JSONEncoder().encode(store) {
-            try? data.write(to: URL(fileURLWithPath: TRACKER_PATH), options: .atomic)
-        }
-    }
-
-    // MARK: - Balance
-
-    @objc private func refreshTimer() {
-        refresh(balance: nil)
-    }
-
-    private func refresh(balance initial: Double?) {
+    @objc private func refresh(_ sender: Any?) {
         DispatchQueue.global(qos: .utility).async {
-            let bal = initial ?? self.fetchBalance()
+            let data = self.loadUsage(days: self.currentDays)
             DispatchQueue.main.async {
-                guard let bal = bal else { return }
-                let prev = self.lastSavedBalance()
-                if bal > prev + self.topUpThreshold {
-                    self.baseline = bal
-                    self.saveTracker(baseline: bal, lastBalance: bal)
-                } else {
-                    if self.baseline == nil { self.baseline = bal }
-                    self.saveTracker(baseline: self.baseline ?? bal, lastBalance: bal)
+                self.latest = data
+                if data.ok, self.quotaRef <= 0 {
+                    self.quotaRef = data.remaining ?? 0
+                    UserDefaults.standard.set(self.quotaRef, forKey: "orQuotaRef")
                 }
-                self.balance = bal
                 self.updateTitle()
+                self.rebuildMenu()
             }
         }
     }
 
-    private func fetchBalance() -> Double? {
-        guard let config = loadConfig() else {
-            DispatchQueue.main.async { self.promptForApiKey() }
-            return nil
-        }
-        var request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/credits")!)
-        request.setValue("Bearer \(config.api_key)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 10
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: Double?
-        let task = URLSession.shared.dataTask(with: request) { data, _, error in
-            defer { semaphore.signal() }
-            if let data = data,
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let creds = json["data"] as? [String: Any],
-               let total = creds["total_credits"] as? Double,
-               let used = creds["total_usage"] as? Double {
-                result = total - used
+    private func loadUsage(days: Int) -> ORUsageData {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: FileManager.default.fileExists(atPath: pythonPath) ? pythonPath : "/usr/bin/python3")
+        process.arguments = [scriptPath, String(days)]
+        process.environment = ProcessInfo.processInfo.environment
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let decoded = try? JSONDecoder().decode(ORUsageData.self, from: data) {
+                return decoded
             }
+            let text = String(data: data, encoding: .utf8) ?? ""
+            return ORUsageData(ok: false, error: "Could not parse: \(text.prefix(120))", days: days, total_credits: nil, total_usage: nil, remaining: nil, remaining_pct: nil, total_cost: nil, total_calls: nil, total_tokens: nil, models: nil)
+        } catch {
+            return ORUsageData(ok: false, error: error.localizedDescription, days: days, total_credits: nil, total_usage: nil, remaining: nil, remaining_pct: nil, total_cost: nil, total_calls: nil, total_tokens: nil, models: nil)
         }
-        task.resume()
-        _ = semaphore.wait(timeout: .now() + 15)
-        return result
     }
 
-    private func lastSavedBalance() -> Double {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: TRACKER_PATH)),
-              let store = try? JSONDecoder().decode(Tracker.self, from: data) else {
-            return 0
-        }
-        return store.lastBalance
+    private func currentRemaining() -> Double { latest?.remaining ?? 0 }
+
+    private func currentPct() -> Double {
+        guard quotaRef > 0 else { return 1.0 }
+        return min(max(currentRemaining() / quotaRef, 0), 1)
     }
 
-    // MARK: - Title & Bar
+    // MARK: - Title
+
+    private func orLogoImage(size: NSSize = NSSize(width: 20, height: 16)) -> NSImage {
+        let img = NSImage(size: size)
+        img.lockFocus()
+        defer { img.unlockFocus() }
+        guard let data = Data(base64Encoded: OR_LOGO_B64),
+              let logoImg = NSImage(data: data) else {
+            img.unlockFocus()
+            return NSImage(size: size)
+        }
+        let logoSize: CGFloat = 16
+        logoImg.size = NSSize(width: logoSize, height: logoSize)
+        logoImg.draw(at: NSPoint(x: 0, y: (size.height - logoSize) / 2), from: .zero, operation: .sourceOver, fraction: 1)
+        img.isTemplate = true
+        return img
+    }
+
+    private func compositeQuotaBar(fraction: Double) -> NSImage {
+        let logoSize: CGFloat = 14
+        let barWidth: CGFloat = 46
+        let barHeight: CGFloat = 12
+        let gap: CGFloat = 2
+        let totalWidth = logoSize + gap + barWidth
+        let totalHeight = max(logoSize, barHeight)
+
+        let img = NSImage(size: NSSize(width: totalWidth, height: totalHeight))
+        img.lockFocus()
+        defer { img.unlockFocus() }
+
+        let logo = orLogoImage(size: NSSize(width: logoSize, height: logoSize))
+        logo.draw(at: NSPoint(x: 0, y: (totalHeight - logoSize) / 2), from: .zero, operation: .sourceOver, fraction: 1)
+
+        let barY = (totalHeight - barHeight) / 2
+        let bar = quotaBarImage(fraction: fraction, width: barWidth, height: barHeight)
+        bar.draw(at: NSPoint(x: logoSize + gap, y: barY), from: .zero, operation: .sourceOver, fraction: 1)
+
+        return img
+    }
 
     private func updateTitle() {
-        guard let bal = balance else {
-            statusItem.button?.title = "OR —"
+        guard let d = latest, d.ok else {
+            statusItem.button?.title = "OR ⚠"
+            statusItem.button?.attributedTitle = NSAttributedString()
             statusItem.button?.image = nil
-            statusItem.button?.toolTip = "ORTracker: unavailable"
             return
         }
-        statusItem.button?.title = String(format: "$%.2f", bal)
-        statusItem.button?.image = balanceBar(balance: bal, baseline: baseline ?? bal)
-        statusItem.button?.toolTip = String(format: "ORTracker: $%.2f left", bal)
+        let pct = currentPct()
+        let bal = currentRemaining()
+
+        // OR logo is always the button image (template, follows system color)
+        statusItem.button?.image = orLogoImage()
+
+        switch displayMode {
+        case "quotaBar":
+            // Bar goes in the attributed title so the logo stays template-colored
+            statusItem.button?.title = ""
+            let attachment = NSTextAttachment()
+            attachment.image = quotaBarImage(fraction: pct)
+            attachment.bounds = CGRect(x: 0, y: -2, width: 46, height: 12)
+            let attr = NSAttributedString(attachment: attachment)
+            statusItem.button?.attributedTitle = attr
+        case "balance":
+            statusItem.button?.attributedTitle = NSAttributedString()
+            statusItem.button?.title = formatMoney(bal)
+        case "percentage":
+            statusItem.button?.attributedTitle = NSAttributedString()
+            statusItem.button?.title = "\(Int((pct * 100).rounded()))%"
+        default:
+            statusItem.button?.attributedTitle = NSAttributedString()
+            statusItem.button?.title = formatMoney(bal)
+        }
+        statusItem.button?.toolTip = "OpenRouter: $\(String(format: "%.2f", bal)) remaining"
     }
 
-    private func balanceBar(balance: Double, baseline: Double, width: CGFloat = 46, height: CGFloat = 12) -> NSImage {
-        let pct = baseline > 0 ? min(max(balance / baseline, 0), 1) : 0
+    private func quotaBarImage(fraction: Double, width: CGFloat = 46, height: CGFloat = 12) -> NSImage {
+        let pct = min(max(fraction, 0), 1)
         let img = NSImage(size: NSSize(width: width, height: height))
         img.lockFocus()
         defer { img.unlockFocus() }
         NSColor.labelColor.withAlphaComponent(0.22).setFill()
-        let trackRect = NSRect(x: 0.5, y: 0.5, width: width - 1, height: height - 1)
-        NSBezierPath(roundedRect: trackRect, xRadius: height / 2, yRadius: height / 2).fill()
+        NSBezierPath(roundedRect: NSRect(x: 0.5, y: 0.5, width: width - 1, height: height - 1), xRadius: height / 2, yRadius: height / 2).fill()
         let fillWidth = max(height, (width - 2) * CGFloat(pct))
         let color: NSColor
         if pct >= 0.5 { color = NSColor.systemGreen }
         else if pct >= 0.25 { color = NSColor.systemOrange }
         else { color = NSColor.systemRed }
         color.setFill()
-        let fillRect = NSRect(x: 0.5, y: 0.5, width: fillWidth, height: height - 1)
-        NSBezierPath(roundedRect: fillRect, xRadius: height / 2, yRadius: height / 2).fill()
+        NSBezierPath(roundedRect: NSRect(x: 0.5, y: 0.5, width: fillWidth, height: height - 1), xRadius: height / 2, yRadius: height / 2).fill()
         return img
-    }
-
-    // MARK: - Auto Update
-
-    @objc private func checkForUpdatesSilent() {
-        checkForUpdates(silent: true)
-    }
-
-    private func checkForUpdates(silent: Bool) {
-        guard let url = URL(string: "https://api.github.com/repos/\(GITHUB_REPO)/releases/latest") else { return }
-        var request = URLRequest(url: url)
-        request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 15
-
-        DispatchQueue.global(qos: .background).async {
-            let semaphore = DispatchSemaphore(value: 0)
-            let task = URLSession.shared.dataTask(with: request) { data, _, error in
-                defer { semaphore.signal() }
-                guard let data = data,
-                      let release = try? JSONDecoder().decode(GitHubRelease.self, from: data) else { return }
-
-                let latest = release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()) : release.tag_name
-                let current = self.currentVersion
-
-                DispatchQueue.main.async {
-                    if latest.compare(current, options: .numeric) == .orderedDescending {
-                        self.pendingUpdate = release.tag_name
-                        // If auto-update is on, update silently
-                        if self.autoUpdate {
-                            self.performUpdate(release: release)
-                        } else if !silent {
-                            // Show notification that update is available
-                            let resp = self.showUpdateAlert(version: latest, notes: release.body ?? "")
-                            if resp {
-                                self.performUpdate(release: release)
-                            }
-                        }
-                    } else if !silent {
-                        self.showUpToDateAlert()
-                    }
-                }
-            }
-            task.resume()
-            _ = semaphore.wait(timeout: .now() + 20)
-        }
-    }
-
-    private func showUpdateAlert(version: String, notes: String) -> Bool {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Update available: v\(version)"
-        let info = notes.isEmpty ? "" : "\n\nWhat's new:\n\(notes)"
-        alert.informativeText = "A new version of ORTracker is ready.\(info)"
-        alert.addButton(withTitle: "Update")
-        alert.addButton(withTitle: "Later")
-        return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    private func showUpToDateAlert() {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "ORTracker is up to date"
-        alert.informativeText = "You're running v\(currentVersion), which is the latest version."
-        alert.addButton(withTitle: "OK")
-        _ = alert.runModal()
-    }
-
-    private func performUpdate(release: GitHubRelease) {
-        // Find the source zip or DMG asset
-        guard let asset = release.assets?.first(where: { $0.name.hasSuffix(".swift") || $0.name.hasSuffix(".zip") || $0.name == "ORTracker.swift" }) ?? release.assets?.first else {
-            return
-        }
-
-        let downloadUrl = asset.browser_download_url
-        guard let url = URL(string: downloadUrl) else { return }
-
-        DispatchQueue.global(qos: .background).async {
-            guard let data = try? Data(contentsOf: url) else { return }
-
-            let tmpDir = "/tmp/ortracker-update"
-            try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
-
-            if asset.name.hasSuffix(".swift") {
-                // Compile from source
-                let sourcePath = "\(tmpDir)/ORTracker.swift"
-                try? data.write(to: URL(fileURLWithPath: sourcePath))
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/swiftc")
-                process.arguments = ["-O", sourcePath, "-o", "\(tmpDir)/ORTracker"]
-                try? process.run()
-                process.waitUntilExit()
-                guard process.terminationStatus == 0,
-                      FileManager.default.fileExists(atPath: "\(tmpDir)/ORTracker") else { return }
-
-                DispatchQueue.main.async {
-                    self.installUpdate(binaryPath: "\(tmpDir)/ORTracker")
-                }
-            } else if asset.name.hasSuffix(".zip") {
-                // Extract and install
-                let zipPath = "\(tmpDir)/update.zip"
-                try? data.write(to: URL(fileURLWithPath: zipPath))
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-                process.arguments = ["-o", zipPath, "-d", tmpDir]
-                try? process.run()
-                process.waitUntilExit()
-
-                // Find the .app bundle
-                let contents = (try? FileManager.default.contentsOfDirectory(atPath: tmpDir)) ?? []
-                if let appName = contents.first(where: { $0.hasSuffix(".app") }) {
-                    DispatchQueue.main.async {
-                        self.installUpdateBundle(appPath: "\(tmpDir)/\(appName)")
-                    }
-                }
-            }
-        }
-    }
-
-    private func installUpdate(binaryPath: String) {
-        // Create .app structure at tmp, then swap
-        let tmpAppPath = "/tmp/ortracker-update/ORTracker.app"
-        let appPath = "/Applications/ORTracker.app"
-        let bundlePath = "\(tmpAppPath)/Contents/MacOS"
-        try? FileManager.default.createDirectory(atPath: bundlePath, withIntermediateDirectories: true)
-
-        // Copy binary
-        try? FileManager.default.copyItem(atPath: binaryPath, toPath: "\(bundlePath)/ORTracker")
-
-        // Create Info.plist
-        let plist: [String: Any] = [
-            "CFBundleExecutable": "ORTracker",
-            "CFBundleIdentifier": "com.mikeyates.ortracker",
-            "CFBundleName": "ORTracker",
-            "CFBundleDisplayName": "ORTracker",
-            "CFBundlePackageType": "APPL",
-            "CFBundleShortVersionString": currentVersion,
-            "LSMinimumSystemVersion": "13.0",
-            "LSUIElement": true,
-            "NSHighResolutionCapable": true,
-        ]
-        let plistData = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        try? plistData?.write(to: URL(fileURLWithPath: "\(tmpAppPath)/Contents/Info.plist"))
-
-        // Replace running app via delayed script
-        let script = """
-        #!/bin/bash
-        sleep 1
-        rm -rf "\(appPath)"
-        cp -R "\(tmpAppPath)" "\(appPath)"
-        codesign --force --deep --sign - "\(appPath)" 2>/dev/null
-        open "\(appPath)"
-        """
-        let scriptPath = "/tmp/ortracker-update/swap.sh"
-        try? script.write(to: URL(fileURLWithPath: scriptPath), atomically: true, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath)
-
-        DispatchQueue.global(qos: .background).async {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = [scriptPath]
-            try? process.run()
-            DispatchQueue.main.async {
-                NSApp.terminate(nil)
-            }
-        }
-    }
-
-    private func installUpdateBundle(appPath: String) {
-        let targetPath = "/Applications/ORTracker.app"
-        let script = """
-        #!/bin/bash
-        sleep 1
-        rm -rf "\(targetPath)"
-        cp -R "\(appPath)" "\(targetPath)"
-        codesign --force --deep --sign - "\(targetPath)" 2>/dev/null
-        open "\(targetPath)"
-        """
-        let scriptPath = "/tmp/ortracker-update/swap.sh"
-        try? script.write(to: URL(fileURLWithPath: scriptPath), atomically: true, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath)
-
-        DispatchQueue.global(qos: .background).async {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = [scriptPath]
-            try? process.run()
-            DispatchQueue.main.async {
-                NSApp.terminate(nil)
-            }
-        }
     }
 
     // MARK: - Menu
 
     private func rebuildMenu() {
         let menu = NSMenu()
+        let d = latest
+        let bal = currentRemaining()
 
-        if let bal = balance {
-            menu.addItem(disabled(String(format: "ORTracker  v%@", currentVersion)))
-            menu.addItem(disabled(String(format: "OpenRouter: $%.2f left", bal)))
-            if let bl = baseline {
-                let pct = bl > 0 ? Int((bal / bl * 100).rounded()) : 0
-                menu.addItem(disabled(String(format: "  %.0f%% remaining  (baseline $%.2f)", pct, bl)))
+        if let d, d.ok {
+            menu.addItem(disabled("OpenRouter usage, last \(d.days ?? 7) days"))
+            menu.addItem(disabled("Cost: \(formatMoney(d.total_cost ?? 0))"))
+            menu.addItem(disabled("API calls: \(formatNumber(d.total_calls ?? 0))"))
+            menu.addItem(disabled("Balance: \(formatMoney(bal))"))
+            menu.addItem(disabled("Remaining: \(Int((d.remaining_pct ?? 0).rounded()))%"))
+            menu.addItem(NSMenuItem.separator())
+            menu.addItem(disabled("Top models"))
+            for m in (d.models ?? []).prefix(8) {
+                let item = NSMenuItem(title: "\(m.model): \(formatMoney(m.cost)) · \(formatNumber(m.tokens)) tok", action: nil, keyEquivalent: "")
+                item.toolTip = "\(formatNumber(m.api_calls)) calls, \(m.sessions) sessions"
+                menu.addItem(item)
             }
         } else {
-            menu.addItem(disabled("ORTracker"))
-            menu.addItem(disabled("OpenRouter: —"))
+            menu.addItem(disabled("OpenRouter unavailable"))
+            if let err = d?.error { menu.addItem(disabled(err)) }
         }
 
         menu.addItem(NSMenuItem.separator())
+        let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+        let viewMenu = NSMenu()
+        for mode in MODES {
+            let label: String
+            switch mode {
+            case "quotaBar": label = "Quota Bar"
+            case "balance": label = "Balance"
+            case "percentage": label = "Percentage"
+            default: label = mode
+            }
+            let item = NSMenuItem(title: label, action: #selector(setDisplayMode(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = mode
+            item.state = mode == displayMode ? .on : .off
+            viewMenu.addItem(item)
+        }
+        viewItem.submenu = viewMenu
+        menu.addItem(viewItem)
 
-        // Auto Update toggle
-        let autoItem = NSMenuItem(title: "Auto Update", action: #selector(toggleAutoUpdate), keyEquivalent: "")
-        autoItem.target = self
-        autoItem.state = autoUpdate ? .on : .off
-        menu.addItem(autoItem)
-
-        let checkItem = NSMenuItem(title: "Check for Updates", action: #selector(checkForUpdatesManual), keyEquivalent: "u")
-        checkItem.target = self
-        menu.addItem(checkItem)
-
+        addDaysItem(menu, days: 7)
+        addDaysItem(menu, days: 30)
+        addDaysItem(menu, days: 90)
         menu.addItem(NSMenuItem.separator())
-
-        let apiItem = NSMenuItem(title: "Set API Key…", action: #selector(setApiKey), keyEquivalent: "")
-        apiItem.target = self
-        menu.addItem(apiItem)
-
-        menu.addItem(NSMenuItem.separator())
-        let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refreshTimer), keyEquivalent: "r")
+        let resetItem = NSMenuItem(title: "Reset Quota", action: #selector(resetQuota(_:)), keyEquivalent: "r")
+        resetItem.target = self
+        resetItem.toolTip = "Sets the quota to 100% at the current balance"
+        menu.addItem(resetItem)
+        let refreshItem = NSMenuItem(title: "Refresh now", action: #selector(refresh(_:)), keyEquivalent: "")
         refreshItem.target = self
         menu.addItem(refreshItem)
-        let quitItem = NSMenuItem(title: "Quit ORTracker", action: #selector(quit(_:)), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit OpenRouter Usage", action: #selector(quit(_:)), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
         statusItem.menu = menu
     }
 
-    @objc private func toggleAutoUpdate() {
-        autoUpdate.toggle()
-        // Persist
-        if let bal = balance {
-            saveTracker(baseline: baseline ?? bal, lastBalance: bal)
-        }
+    private func addDaysItem(_ menu: NSMenu, days: Int) {
+        let item = NSMenuItem(title: "Show last \(days) days", action: #selector(setDays(_:)), keyEquivalent: "")
+        item.target = self; item.representedObject = days
+        item.state = days == currentDays ? .on : .off
+        menu.addItem(item)
+    }
+
+    @objc private func setDisplayMode(_ sender: NSMenuItem) {
+        guard let mode = sender.representedObject as? String, mode != displayMode else { return }
+        displayMode = mode
+        UserDefaults.standard.set(mode, forKey: "orViewMode")
+        updateTitle()
         rebuildMenu()
     }
 
-    @objc private func checkForUpdatesManual() {
-        checkForUpdates(silent: false)
+    @objc private func setDays(_ sender: NSMenuItem) {
+        guard let days = sender.representedObject as? Int else { return }
+        currentDays = days
+        refresh(nil)
     }
 
-    @objc private func setApiKey() {
-        promptForApiKey()
+    @objc private func resetQuota(_ sender: Any?) {
+        quotaRef = currentRemaining()
+        UserDefaults.standard.set(quotaRef, forKey: "orQuotaRef")
+        updateTitle()
+        rebuildMenu()
+        // Notify
+        hostNotify(title: "Quota reset", message: "Quota set to 100% at \(formatMoney(quotaRef))")
+    }
+
+    private func hostNotify(title: String, message: String) {
+        let notification = NSUserNotification()
+        notification.title = title
+        notification.informativeText = message
+        NSUserNotificationCenter.default.deliver(notification)
     }
 
     @objc private func quit(_ sender: Any?) {

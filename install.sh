@@ -52,7 +52,6 @@ if [ -z "$OPENROUTER_API_KEY" ]; then
 else
     API_KEY="$OPENROUTER_API_KEY"
 fi
-
 echo -e "  ${GREEN}✓${NC} API key configured"
 
 # --- Download ---
@@ -61,12 +60,13 @@ trap "rm -rf $TMPDIR" EXIT
 
 echo -n "  Downloading ORTracker..."
 if [ "$VERSION" = "latest" ]; then
-    SOURCE_URL="https://raw.githubusercontent.com/$REPO/main/ORTracker.swift"
+    BASE="https://raw.githubusercontent.com/$REPO/main"
 else
-    SOURCE_URL="https://raw.githubusercontent.com/$REPO/$VERSION/ORTracker.swift"
+    BASE="https://raw.githubusercontent.com/$REPO/$VERSION"
 fi
 
-if curl -fsSL "$SOURCE_URL" -o "$TMPDIR/ORTracker.swift" 2>/dev/null; then
+if curl -fsSL "$BASE/ORTracker.swift" -o "$TMPDIR/ORTracker.swift" 2>/dev/null && \
+   curl -fsSL "$BASE/or_usage.py" -o "$TMPDIR/or_usage.py" 2>/dev/null; then
     echo -e " ${GREEN}done${NC}"
 else
     echo -e " ${RED}failed${NC}"
@@ -104,7 +104,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0.0</string>
+  <string>1.1.0</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>LSUIElement</key>
@@ -125,30 +125,50 @@ cp -R "$APP_BUNDLE" "$INSTALL_DIR/$APP_NAME.app"
 codesign --force --deep --sign - "$INSTALL_DIR/$APP_NAME.app" 2>/dev/null || true
 echo -e " ${GREEN}done${NC}"
 
-# --- Save API key ---
+# --- Install Python backend ---
 mkdir -p "$CONFIG_DIR"
+cp "$TMPDIR/or_usage.py" "$CONFIG_DIR/or_usage.py"
+
+# --- Save API key ---
 echo "{\"api_key\": \"$API_KEY\"}" > "$CONFIG_DIR/config"
 chmod 600 "$CONFIG_DIR/config"
 
+# --- Auto-start via launchd ---
+mkdir -p "$HOME/Library/LaunchAgents"
+cat > "$HOME/Library/LaunchAgents/com.ortracker.menubar.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ortracker.menubar</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/open</string>
+    <string>$INSTALL_DIR/$APP_NAME.app</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+</dict>
+</plist>
+EOF
+launchctl load "$HOME/Library/LaunchAgents/com.ortracker.menubar.plist" 2>/dev/null || true
+
 echo -e ""
 echo -e "  ${GREEN}✓ ORTracker installed to /Applications${NC}"
+echo -e "  ${GREEN}✓ Auto-start configured${NC}"
+echo -e "  ${GREEN}✓ Python backend at $CONFIG_DIR/or_usage.py${NC}"
 echo ""
 echo -e "  ${BOLD}Getting started:${NC}"
-echo "   1. Open ORTracker from your Applications folder"
-echo "   (or run: open /Applications/ORTracker.app)"
-echo ""
-echo -e "  ${BOLD}Menu bar:${NC}"
-echo "   The app sits in your menu bar showing your OpenRouter balance"
-echo "   Click to see: usage stats, auto-update toggle, check for updates"
-echo ""
-echo -e "  ${BOLD}Auto-updates:${NC}"
-echo "   Enabled by default — updates silently in the background"
+echo "   The app is now launching in your menu bar."
+echo "   Look for the OpenRouter logo in the top-right menu bar."
 echo ""
 echo -e "  ${BOLD}To uninstall:${NC}"
 echo "   rm -rf /Applications/ORTracker.app ~/.ortracker"
-echo ""
-
-# Launch
-open "/Applications/ORTracker.app"
-echo -e "  ${GREEN}Launched!${NC} Look for the balance icon in your menu bar."
+echo "   launchctl unload ~/Library/LaunchAgents/com.ortracker.menubar.plist"
+echo "   rm ~/Library/LaunchAgents/com.ortracker.menubar.plist"
 echo ""

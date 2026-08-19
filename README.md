@@ -1,6 +1,10 @@
 # ORTracker — OpenRouter Balance Tracker
 
-A native macOS menu bar app that shows your OpenRouter balance at a glance. Live balance, automatic top-up detection, one-command install.
+A native macOS menu bar app that shows your OpenRouter balance, tracks usage, and detects top-ups automatically.
+
+<p align="center">
+  <img src="hero.svg" alt="ORTracker" width="700">
+</p>
 
 ## Install
 
@@ -8,66 +12,65 @@ A native macOS menu bar app that shows your OpenRouter balance at a glance. Live
 curl -fsSL https://ortracker.yates.id/install.sh | bash
 ```
 
-Or download from [Releases](https://github.com/mikeyates/ortracker/releases/latest).
-
-Requires macOS 13+ and an [OpenRouter API key](https://openrouter.ai/keys).
+Requires macOS 13+, an [OpenRouter API key](https://openrouter.ai/keys), and Xcode Command Line Tools (installs automatically if missing).
 
 ## Features
 
 **Live balance** — Your real OpenRouter balance in the menu bar, updated every 60 seconds. No setup, no servers, no tracking.
 
-**Color bar** — A slim colored bar shows your remaining balance at a glance:
-- Green: 50%+ remaining
-- Orange: 25–50% remaining  
-- Red: less than 25% remaining — time to top up
+**Three display modes** — Choose how you want to see your balance:
+- **Quota Bar** — colored bar (green/orange/red) showing remaining credit at a glance
+- **Balance** — dollar amount remaining
+- **Percentage** — percentage remaining
 
-**Top-up detection** — When you top up your OpenRouter account, the tracker automatically detects the increase and resets to 100%. The bar fills proportionally against your post-top-up balance.
+**Usage analytics** — Click to see per-model breakdown, cost, API calls, and top models by usage.
 
-**Privacy first** — Your API key stays on your machine. The app calls OpenRouter directly — no third party, no analytics, no telemetry.
+**Top-up detection** — When you add credit to OpenRouter, the tracker automatically detects the increase and resets the quota to 100%. Use the **Reset Quota** button to sync manually.
+
+**Auto-start** — Launches automatically on login (stays in your menu bar across restarts).
 
 ## How it works
 
-The app fetches your balance from OpenRouter's [credits API](https://openrouter.ai/docs/api-reference/credits) every 60 seconds. It stores a baseline (your balance after the last top-up) locally in `~/.ortracker/tracker.json`. When the balance jumps by more than $0.50, it registers as a top-up and the bar resets to 100%.
+The app fetches your balance from OpenRouter's [credits API](https://openrouter.ai/docs/api-reference/credits) every 60 seconds. It stores a local baseline (your balance after the last top-up or reset). When the balance jumps by more than $0.50, it registers as a top-up and the bar resets to 100%.
 
-Your API key is stored in `~/.ortracker/config` (restricted to 600 permissions, readable only by you).
+For the per-model usage breakdown, the app reads OpenRouter billing data from Hermes' session database (if available). The balance display works standalone — no Hermes required.
 
 ## Menu
 
 | Item | Action |
 |---|---|
-| Balance & percentage | Your current balance and remaining % |
-| Set API Key | Change your OpenRouter API key |
+| Balance display | Shows your selected view (quota bar, balance, or percentage) |
+| OpenRouter usage | Cost, API calls, balance, remaining % for the selected period |
+| Top models | Per-model cost and token breakdown |
+| View | Switch between Quota Bar, Balance, and Percentage display |
+| Period | 7 / 30 / 90 day usage window |
+| Reset Quota | Sets the quota to 100% at the current balance |
 | Refresh Now | Force a balance refresh |
 | Quit | Exit the app |
+
+## Security
+
+Your OpenRouter API key is stored at `~/.ortracker/config` with 600 permissions (owner read/write only). The app sends a single HTTPS request to `openrouter.ai/api/v1/credits` with your key as a Bearer token — the same as every other OpenRouter client. No telemetry, analytics, or logs leave your machine.
 
 ## Uninstall
 
 ```bash
 rm -rf /Applications/ORTracker.app ~/.ortracker
+launchctl unload ~/Library/LaunchAgents/com.ortracker.menubar.plist 2>/dev/null
+rm ~/Library/LaunchAgents/com.ortracker.menubar.plist 2>/dev/null
 ```
 
 ## Development
 
 ```bash
-# Clone
 git clone https://github.com/mikeyates/ortracker.git
 cd ortracker
-
-# Compile
 swiftc -O ORTracker.swift -o ORTracker
-
-# Run (after setting up API key)
 ./ORTracker
 ```
-
-## Security
-
-Your OpenRouter API key is stored on your machine at `~/.ortracker/config` with 600 file permissions (owner read/write only — no other user or process can read it without root). The app loads it only when making the balance request.
-
-The app sends a single HTTPS request to `openrouter.ai/api/v1/credits` with your key as a Bearer token. The same as every API call your browser or CLI tools make to OpenRouter. The connection is encrypted (TLS), and no telemetry, analytics, or logs leave your machine.
 
 ## Why?
 
 OpenRouter doesn't show your balance in the menu bar. ORTracker fixes that — no browser tab, no dashboard, just the number.
 
-Built with Swift, runs on macOS 13+. Open source under the MIT license.
+Built with Swift, runs on macOS 13+. MIT license.

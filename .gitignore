@@ -9,3 +9,4 @@ Packages/
 *.o
 ortracker_dmg/
 *.dmg
+build/

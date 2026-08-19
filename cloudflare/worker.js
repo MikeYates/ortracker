@@ -2,7 +2,7 @@
 // Routes: /install.sh → install script
 
 const INSTALL_SCRIPT_URL = 'https://raw.githubusercontent.com/mikeyates/ortracker/main/install.sh';
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const GITHUB_REPO = 'mikeyates/ortracker';
 
 async function handleRequest(request) {

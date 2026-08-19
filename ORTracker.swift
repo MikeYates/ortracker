@@ -201,10 +201,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(disabled("Cost: \(formatMoney(d.total_cost ?? 0))"))
             menu.addItem(disabled("API calls: \(formatNumber(d.total_calls ?? 0))"))
             menu.addItem(disabled("Balance: \(formatMoney(bal))"))
-            menu.addItem(disabled("Remaining: \(Int((d.remaining_pct ?? 0).rounded()))%"))
+            menu.addItem(disabled("Remaining: \\(Int((currentPct() * 100).rounded()))%"))
             menu.addItem(NSMenuItem.separator())
-            menu.addItem(disabled("Top models"))
-            for m in (d.models ?? []).prefix(8) {
+            menu.addItem(disabled("Recently used"))
+            for m in (d.models ?? []).prefix(6) {
                 let item = NSMenuItem(title: "\(m.model): \(formatMoney(m.cost)) · \(formatNumber(m.tokens)) tok", action: nil, keyEquivalent: "")
                 item.toolTip = "\(formatNumber(m.api_calls)) calls, \(m.sessions) sessions"
                 menu.addItem(item)

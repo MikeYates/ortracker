@@ -67,6 +67,7 @@ def fetch_model_usage(days=7):
         conn.row_factory = sqlite3.Row
         rows = conn.execute('''
             SELECT u.model,
+                   MAX(s.started_at) last_used,
                    SUM(COALESCE(u.input_tokens, 0)) input_tokens,
                    SUM(COALESCE(u.output_tokens, 0)) output_tokens,
                    SUM(COALESCE(u.cache_read_tokens, 0)) cache_read_tokens,
@@ -80,7 +81,7 @@ def fetch_model_usage(days=7):
               AND (u.billing_provider = 'openrouter'
                    OR u.billing_base_url LIKE '%openrouter%')
             GROUP BY u.model
-            ORDER BY cost DESC
+            ORDER BY last_used DESC
         ''', (cutoff,)).fetchall()
         models = []
         total_cost = 0.0

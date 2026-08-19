@@ -5,3 +5,7 @@ compatibility_date = "2026-08-01"
 routes = [
   { pattern = "ortracker.yates.id", custom_domain = true }
 ]
+
+[[kv_namespaces]]
+binding = "DOWNLOAD_COUNTER"
+id = "668bf503c3714266abbe3199c330d36c"

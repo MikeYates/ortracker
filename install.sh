@@ -163,6 +163,10 @@ echo -e "  ${GREEN}✓ ORTracker installed to /Applications${NC}"
 echo -e "  ${GREEN}✓ Auto-start configured${NC}"
 echo -e "  ${GREEN}✓ Python backend at $CONFIG_DIR/or_usage.py${NC}"
 echo ""
+
+# Track install
+curl -fsSL "https://ortracker.yates.id/track-install" &>/dev/null &
+
 echo -e "  ${BOLD}Getting started:${NC}"
 echo "   The app is now launching in your menu bar."
 echo "   Look for the OpenRouter logo in the top-right menu bar."

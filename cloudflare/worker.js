@@ -4,10 +4,40 @@
 const INSTALL_SCRIPT_URL = 'https://raw.githubusercontent.com/mikeyates/ortracker/main/install.sh';
 const APP_VERSION = '1.1.0';
 const GITHUB_REPO = 'mikeyates/ortracker';
+const DMG_URL = `https://github.com/${GITHUB_REPO}/releases/download/v${APP_VERSION}/ORTracker-${APP_VERSION}.dmg`;
 
 async function handleRequest(request) {
   const url = new URL(request.url);
   const path = url.pathname;
+
+  // /track-install — increment download counter
+  if (path === '/track-install') {
+    try {
+      const count = parseInt((await DOWNLOAD_COUNTER.get('total')) || '0');
+      await DOWNLOAD_COUNTER.put('total', String(count + 1));
+    } catch (_) {}
+    return new Response(null, { status: 204 });
+  }
+
+  // /download-dmg — increment counter then redirect to GitHub
+  if (path === '/download-dmg') {
+    try {
+      const count = parseInt((await DOWNLOAD_COUNTER.get('total')) || '0');
+      await DOWNLOAD_COUNTER.put('total', String(count + 1));
+    } catch (_) {}
+    return Response.redirect(DMG_URL, 302);
+  }
+
+  // /api/stats — returns download count as JSON
+  if (path === '/api/stats') {
+    let total = 0;
+    try {
+      total = parseInt((await DOWNLOAD_COUNTER.get('total')) || '0');
+    } catch (_) {}
+    return new Response(JSON.stringify({ downloads: total }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  }
 
   // Root — info page
   if (path === '/' || path === '') {
@@ -90,6 +120,16 @@ function renderPage() {
   .feature p { font-size: 0.95rem; color: #ccc; }
   .footer { color: #555; font-size: 0.85rem; }
   .footer a { color: #3b82f6; text-decoration: none; }
+  .btn-dmg {
+    display:inline-block; background:#10b981; color:#fff;
+    padding:12px 32px; border-radius:8px; text-decoration:none;
+    font-weight:600; font-size:1rem;
+  }
+  .count-badge {
+    display:inline-block; background:#1a1a1a; border:1px solid #333;
+    border-radius:20px; padding:4px 14px; font-size:0.85rem; color:#888;
+    margin-left:10px;
+  }
   @media (max-width: 480px) {
     .features { grid-template-columns: 1fr; }
     h1 { font-size: 2rem; }
@@ -111,11 +151,21 @@ function renderPage() {
   </div>
 
   <div style="text-align:center; margin-bottom: 40px;">
-    <a href="https://github.com/mikeyates/ortracker/releases/latest"
-       style="display:inline-block; background:#10b981; color:#fff; padding:12px 32px; border-radius:8px; text-decoration:none; font-weight:600; font-size:1rem;">
+    <a href="/download-dmg"
+       class="btn-dmg">
       Download DMG
     </a>
-    <p style="color:#666; font-size:0.8rem; margin-top:8px;">macOS 13+ &middot; 2.1 MB</p>
+    <p style="color:#666; font-size:0.8rem; margin-top:8px;">
+      macOS 13+ &middot; 2.1 MB
+      <span id="download-count" class="count-badge">loading...</span>
+    </p>
+    <script>
+    fetch('/api/stats').then(r=>r.json()).then(d=>{
+      document.getElementById('download-count').textContent = d.downloads.toLocaleString() + ' downloads';
+    }).catch(()=>{
+      document.getElementById('download-count').textContent = '';
+    });
+    </script>
   </div>
 
   <div class="features">

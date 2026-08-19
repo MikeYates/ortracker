@@ -24,6 +24,13 @@ struct ORModel: Decodable {
 }
 
 let MODES = ["quotaBar", "balance", "percentage"]
+let APP_VERSION = "1.1.0"
+let GITHUB_REPO = "mikeyates/ortracker"
+
+struct GitHubRelease: Decodable {
+    let tag_name: String
+    let html_url: String
+}
 
 let OR_LOGO_B64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAABuklEQVRYhe3Wv0tVYRzH8ZeWFEWFYYXRFEJDQYt3KLggaFNDf0R/QGsQtERD1BxSNBQNkdjk0BAhuigqTQZCtDREkkZDcSO1huceiKdz7vlxj0RwP/As5/v9Pp/38/M89NTTP1ZfTnwEV9DASZzA3pIev/AJa3iOl0WKRvGqXVx3m8VwlnE/bmNnl8yT9h7HYvM9mNpl4z/bdAxwr0PyJuYwgzfYqgniXGJ+KSNhVdiE8cY7jlv43iXAdcK6r6QEX+BAPE2RGljvAuAhjKUElrA/xzxRU/UlmewXpjjWNbQKAszjacHcWGuwHFG9rdBRU/nRb+E0fIwCjyoADGC7JMCDpPhHFLhbAQC+lDBfxkHCCfgcdfTXDVVA+3CkQN4OHgsb/1vycTGie1cBYFz2aLeFn9BNnE0rvpNSNFESIO8KfyJc9am6kFKwikMFzS8r9vPqCDGfUvAagznmE/hawDwX4qL0Y/QBV3E4yj+DSfwsYZ4LcaNDUUtYloU2VJVrNxeirz2qbjsvBRFTzAhrOp41TTXqPI5mBUfwTH0Pj6y2kfcqHhKOWQOnhFfxQMmRZqmF+zX11dN/rN+h84r/xbqyIgAAAABJRU5ErkJggg=="
 
@@ -49,6 +56,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         refresh(nil)
         timer = Timer.scheduledTimer(timeInterval: 60, target: self, selector: #selector(refresh(_:)), userInfo: nil, repeats: true)
+        checkForUpdates(nil)
+        Timer.scheduledTimer(timeInterval: 21600, target: self, selector: #selector(checkForUpdates(_:)), userInfo: nil, repeats: true)
     }
 
     @objc private func refresh(_ sender: Any?) {
@@ -244,6 +253,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let refreshItem = NSMenuItem(title: "Refresh now", action: #selector(refresh(_:)), keyEquivalent: "")
         refreshItem.target = self
         menu.addItem(refreshItem)
+
+        // Update check
+        if let url = updateAvailable {
+            let updateItem = NSMenuItem(title: "⚠ Update available — Download", action: #selector(openUpdateURL(_:)), keyEquivalent: "")
+            updateItem.target = self
+            updateItem.representedObject = url
+            menu.addItem(updateItem)
+        }
+        let checkItem = NSMenuItem(title: "Check for Updates", action: #selector(checkForUpdates(_:)), keyEquivalent: "")
+        checkItem.target = self
+        menu.addItem(checkItem)
+
         let quitItem = NSMenuItem(title: "Quit OpenRouter Usage", action: #selector(quit(_:)), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -289,6 +310,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit(_ sender: Any?) {
         NSApp.terminate(nil)
+    }
+
+    // MARK: - Update Check
+
+    private var updateAvailable: String?
+
+    @objc private func openUpdateURL(_ sender: NSMenuItem) {
+        if let url = sender.representedObject as? String {
+            NSWorkspace.shared.open(URL(string: url)!)
+        }
+    }
+
+    @objc private func checkForUpdates(_ sender: Any?) {
+        DispatchQueue.global(qos: .background).async {
+            guard let url = URL(string: "https://api.github.com/repos/\(GITHUB_REPO)/releases/latest") else { return }
+            var req = URLRequest(url: url)
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            req.timeoutInterval = 10
+            guard let data = try? Data(contentsOf: url),
+                  let release = try? JSONDecoder().decode(GitHubRelease.self, from: data) else { return }
+            let latest = release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()) : release.tag_name
+            if latest.compare(APP_VERSION, options: .numeric) == .orderedDescending {
+                DispatchQueue.main.async {
+                    self.updateAvailable = release.html_url
+                    self.rebuildMenu()
+                    self.hostNotify(title: "ORTracker update available",
+                                   message: "Version \(latest) is ready — click Check for Updates in the menu")
+                }
+            }
+        }
     }
 
     private func disabled(_ title: String) -> NSMenuItem {

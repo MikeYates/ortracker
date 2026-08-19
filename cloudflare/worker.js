@@ -34,6 +34,7 @@ async function handleRequest(request) {
       version: APP_VERSION,
       repo: GITHUB_REPO,
       download_url: `https://github.com/${GITHUB_REPO}/releases/latest`,
+      dmg_url: `https://github.com/${GITHUB_REPO}/releases/download/v${APP_VERSION}/ORTracker-${APP_VERSION}.dmg`,
       install_cmd: `curl -fsSL https://ortracker.yates.id/install.sh | bash`,
     }), {
       headers: { 'content-type': 'application/json' },
@@ -107,6 +108,14 @@ function renderPage() {
   <div class="install-box">
     <p style="margin-bottom: 12px; font-weight: 600;">Install with one command:</p>
     <code>curl -fsSL https://ortracker.yates.id/install.sh | bash</code>
+  </div>
+
+  <div style="text-align:center; margin-bottom: 40px;">
+    <a href="https://github.com/mikeyates/ortracker/releases/latest"
+       style="display:inline-block; background:#10b981; color:#fff; padding:12px 32px; border-radius:8px; text-decoration:none; font-weight:600; font-size:1rem;">
+      Download DMG
+    </a>
+    <p style="color:#666; font-size:0.8rem; margin-top:8px;">macOS 13+ &middot; 2.1 MB</p>
   </div>
 
   <div class="features">

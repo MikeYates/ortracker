@@ -2,6 +2,10 @@
 
 A native macOS menu bar app that shows your OpenRouter balance, tracks usage, and detects top-ups automatically.
 
+<p align="center">
+  <img src="hero.png" alt="ORTracker" width="600">
+</p>
+
 ## Install
 
 ```bash
